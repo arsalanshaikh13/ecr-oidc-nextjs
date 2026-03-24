@@ -51,12 +51,24 @@ resource "aws_ecr_lifecycle_policy" "app_repo_lifecycle" {
 #---------------------------------------------
 # 2. CloudWatch Log Group
 #---------------------------------------------
-resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name              = "/ecs/lirw-${local.env_suffix}"
-  retention_in_days = 30 
-  tags              = local.common_tags
-}
+# resource "aws_cloudwatch_log_group" "ecs_log_group" {
+#   name              = "/ecs/lirw-${local.env_suffix}"
+#   retention_in_days = 30 
+#   tags              = local.common_tags
+# }
 
+resource "aws_cloudwatch_log_group" "ecs_log_group" {
+  # Loops through dashboard, books, and authors
+  for_each          = local.services 
+  
+  # Creates distinct names like /ecs/lirw-books-dev
+  name              = "/ecs/lirw-${each.key}-${local.env_suffix}"
+  retention_in_days = 30 
+  
+  tags = merge(local.common_tags, {
+    Name = "lirw-${each.key}-logs-${local.env_suffix}"
+  })
+}
 #---------------------------------------------
 # 3. IAM Roles (Tasks, Execution, and EC2 Nodes)
 #---------------------------------------------
@@ -567,9 +579,23 @@ resource "aws_lb_listener_rule" "api_routing" {
     target_group_arn = aws_lb_target_group.app_tg[each.key].arn
   }
 
+  # condition {
+  #   host_header {
+  #     values = ["${each.key}.devsandbox.space"]
+  #   }
+  # }
+  # Condition 1: Match the specific domain (Optional but recommended)
   condition {
     host_header {
-      values = ["${each.key}.devsandbox.space"]
+      values = ["www.${var.domain_name}", var.domain_name]
+    }
+  }
+
+  # Condition 2: Match the path
+  condition {
+    path_pattern {
+      # Matches exactly "/books" and anything under it like "/books/123"
+      values = ["/${each.key}", "/${each.key}/*"] 
     }
   }
 }
@@ -658,10 +684,11 @@ resource "aws_ecs_task_definition" "app_task" {
     ACCOUNT_ID       = var.account_id
     APP_CPU          = var.app_cpu
     APP_MEMORY       = var.app_memory
+    ENV_VAR          = local.env_suffix
     # Initial bootstrap env; CI/CD will handle the real ones later
     ENVIRONMENT_VARS = each.key == "dashboard" ? jsonencode([
-      { name = "BOOKS_SERVICE_URL", value = "https://books.${var.domain_name}" },
-      { name = "AUTHORS_SERVICE_URL", value = "https://authors.${var.domain_name}" }
+      { name = "BOOKS_SERVICE_URL", value = "https://${var.domain_name}/books" },
+      { name = "AUTHORS_SERVICE_URL", value = "https://${var.domain_name}/authors" }
     ]) : "[]"
   })
 }

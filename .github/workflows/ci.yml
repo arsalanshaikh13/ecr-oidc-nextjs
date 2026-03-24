@@ -40,7 +40,7 @@ jobs:
             env: "[]"
           - service: "dashboard"
             port: 3200
-            env: '[{"name": "BOOKS_SERVICE_URL", "value": "https://books.${{ vars.DOMAIN_NAME }}"}, {"name": "AUTHORS_SERVICE_URL", "value": "https://authors.${{ vars.DOMAIN_NAME }}"}]'
+            env: '[{"name": "BOOKS_SERVICE_URL", "value": "https://${{ vars.DOMAIN_NAME }}/books"}, {"name": "AUTHORS_SERVICE_URL", "value": "https://${{ vars.DOMAIN_NAME }}/authors"}]'
 
     steps:
       - name: Checkout repository
