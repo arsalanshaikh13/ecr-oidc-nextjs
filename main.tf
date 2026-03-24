@@ -197,20 +197,20 @@ resource "aws_security_group" "app_task_sg" {
   description = "SG for ECS tasks"
   vpc_id      = aws_vpc.vpc.id
 
-  ingress {
-    description = "http port access"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    description = "node port access"
-    from_port                = 3200
-    to_port                  = 3200
-    protocol                 = "tcp"
-    security_groups = [aws_security_group.alb_sg.id]
-  }
+  # ingress {
+  #   description = "http port access"
+  #   from_port   = 80
+  #   to_port     = 80
+  #   protocol    = "tcp"
+  #   cidr_blocks = ["0.0.0.0/0"]
+  # }
+  # ingress {
+  #   description = "node port access"
+  #   from_port                = 3200
+  #   to_port                  = 3200
+  #   protocol                 = "tcp"
+  #   security_groups = [aws_security_group.alb_sg.id]
+  # }
   # ingress {
   #   description = "node port access"
   #   from_port                = 32768
@@ -218,6 +218,19 @@ resource "aws_security_group" "app_task_sg" {
   #   protocol                 = "tcp"
   #   security_groups = [aws_security_group.alb_sg.id]
   # }
+
+  # Dynamically creates ingress rules for 3200, 3300, and 3400
+  dynamic "ingress" {
+    for_each = local.services
+    content {
+      description     = "Access for ${ingress.key} from ALB"
+      from_port       = ingress.value.port
+      to_port         = ingress.value.port
+      protocol        = "tcp"
+      # Only allow traffic that comes through the Load Balancer
+      security_groups = [aws_security_group.alb_sg.id] 
+    }
+  }
 
   egress {
     from_port   = 0
@@ -259,21 +272,33 @@ resource "aws_security_group" "ecs_node_sg" {
   name        = "ecs-node-sg-${local.env_suffix}"
   description = "SG for ECS EC2 nodes"
   vpc_id      = aws_vpc.vpc.id
-  ingress {
-    description = "node port access"
-    from_port   = 3200
-    to_port     = 3200
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    description = "node port access"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  # ingress {
+  #   description = "node port access"
+  #   from_port   = 3200
+  #   to_port     = 3200
+  #   protocol    = "tcp"
+  #   cidr_blocks = ["0.0.0.0/0"]
+  # }
+  # ingress {
+  #   description = "node port access"
+  #   from_port   = 80
+  #   to_port     = 80
+  #   protocol    = "tcp"
+  #   cidr_blocks = ["0.0.0.0/0"]
+  # }
 
+# Dynamically creates ingress rules for 3200, 3300, and 3400
+  dynamic "ingress" {
+    for_each = local.services
+    content {
+      description     = "Access for ${ingress.key} from ALB"
+      from_port       = ingress.value.port
+      to_port         = ingress.value.port
+      protocol        = "tcp"
+      # Only allow traffic that comes through the Load Balancer
+      security_groups = [aws_security_group.alb_sg.id] 
+    }
+  }
   # ingress {
   #   description = "node port access"
   #   from_port                = 32768
@@ -466,18 +491,6 @@ resource "aws_lb" "app_alb" {
   # enable_deletion_protection = true 
 }
 
-resource "aws_lb_target_group" "apps" {
-  for_each    = toset(["books", "authors", "dashboard"])
-  name        = "${each.key}-tg"
-  port        = 8080 # Port your Docker containers are listening on
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.vpc.id
-  target_type = "ip" # Required for Fargate
-
-  health_check {
-    path = "/" # Ensure your apps have a root health check endpoint
-  }
-}
 
 resource "aws_lb_target_group" "app_tg" {
   for_each    = toset(["books", "authors", "dashboard"])
@@ -616,8 +629,8 @@ resource "aws_lb_listener_rule" "api_routing" {
 locals {
   services = {
     dashboard = { port = 3200 }
-    books     = { port = 3300 }
-    authors   = { port = 3400 }
+    books     = { port = 3400 }
+    authors   = { port = 3300 }
   }
 }
 
@@ -743,7 +756,7 @@ resource "aws_ecs_service" "app_service" {
 
   lifecycle {
     ignore_changes = [
-      task_definition,
+      # task_definition,
       desired_count
     ]
   }

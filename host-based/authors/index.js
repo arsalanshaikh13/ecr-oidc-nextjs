@@ -35,13 +35,11 @@ app.get("/", (req, res) => {
 
 // Health check endpoint (Point your ALB target group health check to /health)
 app.get("/health", (req, res) => {
-  res
-    .status(200)
-    .json({
-      status: "ok",
-      message: "Authors service is healthy",
-      uptime: process.uptime(),
-    });
+  res.status(200).json({
+    status: "ok",
+    message: "Authors service is healthy",
+    uptime: process.uptime(),
+  });
 });
 
 // Authors API endpoint

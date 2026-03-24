@@ -33,10 +33,10 @@ jobs:
       matrix:
         include:
           - service: "authors"
-            port: 3400
+            port: 3300
             env: "[]"
           - service: "books"
-            port: 3300
+            port: 3400
             env: "[]"
           - service: "dashboard"
             port: 3200
