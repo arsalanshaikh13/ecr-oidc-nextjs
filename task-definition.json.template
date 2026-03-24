@@ -1,0 +1,22 @@
+[
+  {
+    "name": "lirw-${SERVICE_NAME}",
+    "image": "httpd:2.4-alpine",
+    "essential": true,
+    "portMappings": [
+      {
+        "containerPort": ${APP_PORT},
+        "protocol": "tcp"
+      }
+    ],
+    "environment": ${ENVIRONMENT_VARS},
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/lirw-${SERVICE_NAME}",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "ecs"
+      }
+    }
+  }
+]
