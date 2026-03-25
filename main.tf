@@ -390,6 +390,20 @@ resource "aws_route53_record" "root_alias" {
     evaluate_target_health = true
   }
 }
+# 2. Subdomains (www, books, authors)
+resource "aws_route53_record" "subdomain_alias" {
+  for_each = toset(["www", "books", "authors"])
+  
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "${each.key}.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.app_alb.dns_name
+    zone_id                = aws_lb.app_alb.zone_id
+    evaluate_target_health = true
+  }
+}
 
 
 #---------------------------------------------
@@ -591,8 +605,8 @@ resource "aws_ecs_task_definition" "app_task" {
     ENV_VAR          = local.env_suffix
     # Initial bootstrap env; CI/CD will handle the real ones later
     ENVIRONMENT_VARS = each.key == "dashboard" ? jsonencode([
-      { name = "BOOKS_SERVICE_URL", value = "https://${var.domain_name}/books" },
-      { name = "AUTHORS_SERVICE_URL", value = "https://${var.domain_name}/authors" }
+      { name = "BOOKS_SERVICE_URL", value = "https://books.${var.domain_name}" },
+      { name = "AUTHORS_SERVICE_URL", value = "https://authors.${var.domain_name}" }
     ]) : "[]"
   })
 }
