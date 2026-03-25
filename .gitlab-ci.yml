@@ -87,8 +87,8 @@ build_image:
         FINAL_IMAGE="$ECR_REGISTRY/$REPO_NAME:$FETCHED_TAG"
       fi
 
-    # ✅ NEW: Save to a standard text file instead of a dotenv report
-    - echo "$FINAL_IMAGE" > ${SERVICE}-image.txt
+    # ✅ NEW: Force the file to be created in the absolute root of the project
+    - echo "$FINAL_IMAGE" > $CI_PROJECT_DIR/${SERVICE}-image.txt
   artifacts:
     # reports:
     #   dotenv: build-${SERVICE}.env
