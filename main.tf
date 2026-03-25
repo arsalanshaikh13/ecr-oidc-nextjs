@@ -51,12 +51,24 @@ resource "aws_ecr_lifecycle_policy" "app_repo_lifecycle" {
 #---------------------------------------------
 # 2. CloudWatch Log Group
 #---------------------------------------------
-resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name              = "/ecs/lirw-${local.env_suffix}"
-  retention_in_days = 30 
-  tags              = local.common_tags
-}
+# resource "aws_cloudwatch_log_group" "ecs_log_group" {
+#   name              = "/ecs/lirw-${local.env_suffix}"
+#   retention_in_days = 30 
+#   tags              = local.common_tags
+# }
 
+resource "aws_cloudwatch_log_group" "ecs_log_group" {
+  # Loops through dashboard, books, and authors
+  for_each          = local.services 
+  
+  # Creates distinct names like /ecs/lirw-books-dev
+  name              = "/ecs/lirw-${each.key}-${local.env_suffix}"
+  retention_in_days = 30 
+  
+  tags = merge(local.common_tags, {
+    Name = "lirw-${each.key}-logs-${local.env_suffix}"
+  })
+}
 #---------------------------------------------
 # 3. IAM Roles (Tasks, Execution, and EC2 Nodes)
 #---------------------------------------------
@@ -191,81 +203,6 @@ resource "aws_security_group" "alb_sg" {
 }
 
 
-# Task SG (For the individual containers running in awsvpc mode)
-resource "aws_security_group" "app_task_sg" {
-  name        = "lirw-task-sg-${local.env_suffix}"
-  description = "SG for ECS tasks"
-  vpc_id      = aws_vpc.vpc.id
-
-  # ingress {
-  #   description = "http port access"
-  #   from_port   = 80
-  #   to_port     = 80
-  #   protocol    = "tcp"
-  #   cidr_blocks = ["0.0.0.0/0"]
-  # }
-  # ingress {
-  #   description = "node port access"
-  #   from_port                = 3200
-  #   to_port                  = 3200
-  #   protocol                 = "tcp"
-  #   security_groups = [aws_security_group.alb_sg.id]
-  # }
-  # ingress {
-  #   description = "node port access"
-  #   from_port                = 32768
-  #   to_port                  = 65535
-  #   protocol                 = "tcp"
-  #   security_groups = [aws_security_group.alb_sg.id]
-  # }
-
-  # Dynamically creates ingress rules for 3200, 3300, and 3400
-  dynamic "ingress" {
-    for_each = local.services
-    content {
-      description     = "Access for ${ingress.key} from ALB"
-      from_port       = ingress.value.port
-      to_port         = ingress.value.port
-      protocol        = "tcp"
-      # Only allow traffic that comes through the Load Balancer
-      security_groups = [aws_security_group.alb_sg.id] 
-    }
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-# resource "aws_security_group_rule" "allow_alb_to_tasks" {
-#   type                     = "ingress"
-#   from_port                = 3200
-#   to_port                  = 3200
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.app_task_sg.id
-#   source_security_group_id = aws_security_group.alb_sg.id
-# }
-# resource "aws_security_group_rule" "allow_alb_to_tasks" {
-#   type                     = "ingress"
-#   from_port                = 32768
-#   to_port                  = 65535
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.app_task_sg.id
-#   source_security_group_id = aws_security_group.alb_sg.id
-# }
-
-
-# resource "aws_vpc_security_group_ingress_rule" "allow_http" {
-#   security_group_id = aws_security_group.app_task_sg.id
-#   cidr_ipv4         = "0.0.0.0/0"
-#   from_port         = 80
-#   ip_protocol       = "tcp"
-#   to_port           = 80
-# }
-
 
 # NEW: Node SG (For the underlying EC2 instances to talk to AWS endpoints)
 resource "aws_security_group" "ecs_node_sg" {
@@ -344,8 +281,8 @@ resource "aws_launch_template" "ecs_lt" {
 
 resource "aws_autoscaling_group" "ecs_asg" {
   name                = "ecs-asg-${local.env_suffix}"
-  # vpc_zone_identifier = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
-  vpc_zone_identifier = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
+  vpc_zone_identifier = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
+  # vpc_zone_identifier = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
   
   min_size         = 1
   max_size         = 3
@@ -440,17 +377,7 @@ resource "aws_acm_certificate_validation" "app_cert_wait" {
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
-# resource "aws_route53_record" "app_alias" {
-#   zone_id = data.aws_route53_zone.main.zone_id
-#   name    = var.domain_name
-#   type    = "A"
 
-#   alias {
-#     name                   = aws_lb.app_alb.dns_name
-#     zone_id                = aws_lb.app_alb.zone_id
-#     evaluate_target_health = true
-#   }
-# }
 # 1. Root Domain (devsandbox.space)
 resource "aws_route53_record" "root_alias" {
   zone_id = data.aws_route53_zone.main.zone_id
@@ -463,7 +390,6 @@ resource "aws_route53_record" "root_alias" {
     evaluate_target_health = true
   }
 }
-
 # 2. Subdomains (www, books, authors)
 resource "aws_route53_record" "subdomain_alias" {
   for_each = toset(["www", "books", "authors"])
@@ -478,6 +404,8 @@ resource "aws_route53_record" "subdomain_alias" {
     evaluate_target_health = true
   }
 }
+
+
 #---------------------------------------------
 # 9. ALB + Target Group + Listener
 #---------------------------------------------
@@ -506,8 +434,8 @@ resource "aws_lb_target_group" "app_tg" {
   # port        = 80
   protocol    = "HTTP"
   vpc_id      = aws_vpc.vpc.id
-  target_type = "ip" # Must be 'ip' when using awsvpc network mode
-  # target_type = "instance" # Must be 'ip' when using awsvpc network mode
+  # target_type = "ip" # Must be 'ip' when using awsvpc network mode
+  target_type = "instance" # Must be 'instance' when using host/bridge network mode
 
   # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
   deregistration_delay = 30
@@ -569,9 +497,23 @@ resource "aws_lb_listener_rule" "api_routing" {
 
   condition {
     host_header {
-      values = ["${each.key}.devsandbox.space"]
+      values = ["${each.key}.${var.domain_name}"]
     }
   }
+  # # Condition 1: Match the specific domain (Optional but recommended)
+  # condition {
+  #   host_header {
+  #     values = ["www.${var.domain_name}", var.domain_name]
+  #   }
+  # }
+
+  # # Condition 2: Match the path
+  # condition {
+  #   path_pattern {
+  #     # Matches exactly "/books" and anything under it like "/books/123"
+  #     values = ["/${each.key}", "/${each.key}/*", "/${each.key}*"] 
+  #   }
+  # }
 }
 #---------------------------------------------
 # 10. ECS Task Definition
@@ -643,7 +585,9 @@ resource "aws_ecs_task_definition" "app_task" {
   # }
   for_each         = local.services
   family                   = "lirw-task-${each.key}"
-  network_mode             = "awsvpc"
+  # network_mode             = "awsvpc"
+  # network_mode             = "bridge"
+  network_mode             = "host"
   requires_compatibilities = ["EC2"]
   cpu                      = var.app_cpu
   memory                   = var.app_memory
@@ -658,12 +602,14 @@ resource "aws_ecs_task_definition" "app_task" {
     ACCOUNT_ID       = var.account_id
     APP_CPU          = var.app_cpu
     APP_MEMORY       = var.app_memory
+    ENV_VAR          = local.env_suffix
     # Initial bootstrap env; CI/CD will handle the real ones later
     ENVIRONMENT_VARS = each.key == "dashboard" ? jsonencode([
       { name = "BOOKS_SERVICE_URL", value = "https://books.${var.domain_name}" },
       { name = "AUTHORS_SERVICE_URL", value = "https://authors.${var.domain_name}" }
     ]) : "[]"
   })
+  
 }
 #---------------------------------------------
 # 11. ECS Service
@@ -736,11 +682,6 @@ resource "aws_ecs_service" "app_service" {
     weight            = 100
   }
 
-  network_configuration {
-    subnets          = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id] 
-    security_groups  = [aws_security_group.app_task_sg.id]
-    assign_public_ip = false 
-  }
 
   health_check_grace_period_seconds = 60
 
@@ -756,7 +697,7 @@ resource "aws_ecs_service" "app_service" {
 
   lifecycle {
     ignore_changes = [
-      # task_definition,
+      task_definition,
       desired_count
     ]
   }
