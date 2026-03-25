@@ -87,12 +87,13 @@ build_image:
         FINAL_IMAGE="$ECR_REGISTRY/$REPO_NAME:$FETCHED_TAG"
       fi
 
-    # Save to a dynamically named .env file to prevent matrix overwrites
-    - echo "FINAL_IMAGE_URI=$FINAL_IMAGE" > build-${SERVICE}.env
+    # ✅ NEW: Save to a standard text file instead of a dotenv report
+    - echo "$FINAL_IMAGE" > ${SERVICE}-image.txt
   artifacts:
-    reports:
-      dotenv: build-${SERVICE}.env
-
+    # reports:
+    #   dotenv: build-${SERVICE}.env
+    paths:
+      - ${SERVICE}-image.txt
 # ---------------------------------------------------------
 # STAGE 2: PREPARE MANIFESTS
 # ---------------------------------------------------------
@@ -108,6 +109,8 @@ prepare_manifest:
     - apk add --no-cache aws-cli jq
     - !reference [.aws_oidc_login, script]
   script:
+    # ✅ NEW: Read the exact artifact for this specific service
+    - FINAL_IMAGE_URI=$(cat ${SERVICE}-image.txt)
     - echo "Updating task definition for $SERVICE using image $FINAL_IMAGE_URI"
 
     - aws ecs describe-task-definition --task-definition lirw-task-${SERVICE} --query taskDefinition > task-def.json
