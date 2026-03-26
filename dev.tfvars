@@ -4,7 +4,7 @@
 
 region       = "us-east-1"
 environment  = "dev"
-project_name = "ECS-LIRW-ALB"
+project_name = "ECS-Rusin-ALB"
 
 # Networking
 vpc_id          = "vpc-id"
@@ -32,4 +32,5 @@ desired_count = 1
 
 # Secret (use ARN of secret in AWS Secrets Manager)
 secret_key     = "Secret Key"
+better_auth_secret = "eE0n2KuKkUnDkOWAandcOV8unOrISebs"
 app_secret_arn = "arn:aws:secretsmanager:us-east-1:ACCOUNT-ID:secret:APP_SECRET-3vRpHC"

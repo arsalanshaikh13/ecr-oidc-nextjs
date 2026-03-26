@@ -4,6 +4,4 @@
 .terraform.*
 terraform.*
 task-defini*.json
-path-based/
-.github/**/**
-**/**/ci.yml
+.gitlab-ci.yml

@@ -43,6 +43,17 @@ variable "app_memory" {
   type        = number
   default     = 1024
 }
+variable "mongo_cpu" {
+  description = "CPU units for the ECS task definition"
+  type        = number
+  default     = 1024
+}
+
+variable "mongo_memory" {
+  description = "Memory in MB for the ECS task definition"
+  type        = number
+  default     = 2048
+}
 variable "app_memory_soft_limit" {
   description = "Memory in MB for the ECS task definition"
   type        = number
@@ -82,13 +93,28 @@ variable "account_id" {
   type        = string
   default = "750702272407"
 }
+variable "app_image_uri" {
+  description = "The primary placeholder image"
+  type        = string
+  default = "node:24-alpine"
+}
+variable "mongo_image_uri" {
+  description = "The primary placeholder image"
+  type        = string
+  default = "public.ecr.aws/docker/library/mongo:7.0-jammy"
+}
+variable "better_auth_secret" {
+  description = "The primary placeholder image"
+  type        = string
+  sensitive = true
+}
 
 variable "project_name" {}
 variable "vpc_cidr" {}
 variable "pub_sub_1a_cidr" {}
 variable "pub_sub_2b_cidr" {}
-# variable "pri_sub_3a_cidr" {}
-# variable "pri_sub_4b_cidr" {}
+variable "pri_sub_3a_cidr" {}
+variable "pri_sub_4b_cidr" {}
 # variable "pri_sub_5a_cidr" {}
 # variable "pri_sub_6b_cidr" {}
 # variable "pri_sub_7a_cidr" {}

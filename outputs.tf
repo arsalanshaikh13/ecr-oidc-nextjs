@@ -17,33 +17,9 @@ output "alb_dns_name" {
   value       = aws_lb.app_alb.dns_name
 }
 
-output "dashboard_service_name" {
-  description = "ECS Service name"
-  value       = aws_ecs_service.app_service["dashboard"].name
-}
-output "authors_service_name" {
-  description = "ECS Service name"
-  value       = aws_ecs_service.app_service["authors"].name
-}
-output "books_service_name" {
-  description = "ECS Service name"
-  value       = aws_ecs_service.app_service["books"].name
-}
 
 output "task_role_arn" {
   description = "Task Execution Role ARN"
   value       = aws_iam_role.ecs_task_execution_role.arn
 }
 
-output "dashboard_repo_url" {
-  description = "ecr_repo repo url"
-  value       = aws_ecr_repository.app_repos["dashboard-repo"].repository_url
-}
-output "authors_repo_url" {
-  description = "ecr_repo repo url"
-  value       = aws_ecr_repository.app_repos["authors-repo"].repository_url
-}
-output "books_repo_url" {
-  description = "ecr_repo repo url"
-  value       = aws_ecr_repository.app_repos["books-repo"].repository_url
-}
