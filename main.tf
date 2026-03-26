@@ -975,7 +975,7 @@ resource "aws_ecs_task_definition" "app" {
         { name = "NODE_ENV", value = local.env_suffix },
         { name = "NEXT_PUBLIC_APP_URL", value = "https://${var.domain_name}" },
         { name = "BETTER_AUTH_URL", value = "https://${var.domain_name}" },
-        { name = "COGNITO_DOMAIN", value = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
+        { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "COGNITO_REGION", value = var.region },
         { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id }
       ]
@@ -1190,6 +1190,19 @@ resource "aws_security_group_rule" "ec2_mongodb_ingress" {
   protocol                 = "tcp"
   security_group_id        = aws_security_group.ecs_node_sg.id
   source_security_group_id = aws_security_group.mongodb_nlb.id
+}
+# Allow EC2 nodes to communicate with each other on the MongoDB port
+# This is required because the NLB preserves the original Client IP
+resource "aws_security_group_rule" "ecs_node_self_mongo" {
+  type                     = "ingress"
+  from_port                = 27017
+  to_port                  = 27017
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.ecs_node_sg.id
+  
+  # The SG references itself!
+  source_security_group_id = aws_security_group.ecs_node_sg.id 
+  description              = "Mongo ingress via NLB Client IP Preservation"
 }
 # The MongoDB ECS Service
 resource "aws_ecs_service" "mongodb" {
