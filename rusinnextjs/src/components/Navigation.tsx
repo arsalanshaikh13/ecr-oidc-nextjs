@@ -36,7 +36,7 @@ export default function Navigation() {
             const cognitoDomain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
             const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
 
-            const logoutUri = `https://${process.env.NEXT_PUBLIC_APP_URL}/api/auth-logout`;
+            const logoutUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/auth-logout`;
 
             if (!cognitoDomain || !clientId) {
               console.error("Missing Cognito environment variables!");
