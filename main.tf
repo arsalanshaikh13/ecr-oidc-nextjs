@@ -451,10 +451,17 @@ resource "aws_security_group" "ecs_node_sg" {
   #   }
   # }
 # 1. Existing Rule: Allow Public ALB to hit Ephemeral Ports
+  # ingress {
+  #   description     = "node port access from ALB"
+  #   from_port       = 32768
+  #   to_port         = 65535
+  #   protocol        = "tcp"
+  #   security_groups = [aws_security_group.alb_sg.id]
+  # }
   ingress {
     description     = "node port access from ALB"
-    from_port       = 32768
-    to_port         = 65535
+    from_port       = 3000
+    to_port         = 3000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb_sg.id]
   }
@@ -1082,7 +1089,8 @@ resource "aws_route53_record" "subdomain_alias" {
 
 resource "aws_ecs_task_definition" "mongodb" {
   family                   = "nextjs-task-manager-mongodb"
-  network_mode             = "bridge"
+  # network_mode             = "bridge"
+  network_mode             = "host"
   requires_compatibilities = ["EC2"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
@@ -1163,7 +1171,8 @@ resource "aws_ecs_task_definition" "mongodb" {
 
 resource "aws_ecs_task_definition" "app" {
   family                   = "nextjs-task-manager-app"
-  network_mode             = "bridge"
+  # network_mode             = "bridge"
+  network_mode             = "host"
   requires_compatibilities = ["EC2"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
