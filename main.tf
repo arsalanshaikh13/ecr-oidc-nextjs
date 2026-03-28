@@ -217,6 +217,35 @@ resource "aws_iam_role_policy_attachment" "ecs_metadata_attach_exec" {
   policy_arn = aws_iam_policy.ecs_metadata_policy.arn
 }
 
+# 1. Create the policy that grants Admin access to your specific User Pool to update usernamae and password
+resource "aws_iam_policy" "ecs_cognito_admin_policy" {
+  name        = "ecsCognitoAdminPolicy-dev" # or use your local.env_suffix
+  description = "Allows the Next.js backend to manage Cognito users"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "AllowCognitoAdminActions"
+        Effect   = "Allow"
+        Action   = [
+          "cognito-idp:AdminUpdateUserAttributes",
+          "cognito-idp:AdminSetUserPassword",
+          "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminDeleteUser" # Added in case you build a "Delete Account" button!
+        ]
+        # Restrict this power ONLY to your specific User Pool
+        Resource = aws_cognito_user_pool.main.arn 
+      }
+    ]
+  })
+}
+
+# 2. Attach the policy to your ECS Task Role
+resource "aws_iam_role_policy_attachment" "ecs_cognito_admin_attach" {
+  role       = aws_iam_role.ecs_task_role.name
+  policy_arn = aws_iam_policy.ecs_cognito_admin_policy.arn
+}
 
 #---------------------------------------------
 # SSM Parameter and Secrets Manager setup
@@ -292,7 +321,7 @@ resource "aws_secretsmanager_secret_version" "mongodb_uri_val" {
   
   # Dynamically builds: mongodb://admin:<random_password>@<internal-nlb-dns>:27017/task_manager?authSource=admin
   secret_string = format(
-    "mongodb://admin:%s@%s:27017/task_manager?authSource=admin",
+    "mongodb://admin:%s@%s:27017/task_manager?authSource=admin&directConnection=true",
     random_password.mongodb_password.result,
     aws_lb.mongodb_internal.dns_name
   )
@@ -375,13 +404,44 @@ resource "aws_security_group" "ecs_node_sg" {
   #     security_groups = [aws_security_group.alb_sg.id] 
   #   }
   # }
+# 1. Existing Rule: Allow Public ALB to hit Ephemeral Ports
   ingress {
-    description = "node port access"
-    from_port                = 32768
-    to_port                  = 65535
-    protocol                 = "tcp"
+    description     = "node port access from ALB"
+    from_port       = 32768
+    to_port         = 65535
+    protocol        = "tcp"
     security_groups = [aws_security_group.alb_sg.id]
   }
+
+  # 2. NEW: Allow the Internal NLB to route traffic to the Mongo Container
+  # ingress {
+  #   description     = "Allow traffic from Internal NLB"
+  #   from_port       = 27017
+  #   to_port         = 27017
+  #   protocol        = "tcp"
+  #   security_groups = [aws_security_group.mongodb_nlb.id]
+  # }
+
+  # 3. NEW: The Hairpin Fix (Self-Referencing)
+  # Allows containers on the same EC2 node to talk to each other
+  ingress {
+    description = "Mongo ingress via NLB Client IP Preservation (Hairpin)"
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    self        = true # This tells the SG to allow traffic from itself!
+  }
+
+# Bulletproof Internal VPC Rule for MongoDB
+  ingress {
+    description = "Allow all internal VPC traffic to hit MongoDB"
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    # Replace with your actual VPC CIDR if it is different!
+    cidr_blocks = ["10.0.0.0/16"] 
+  }
+
 
   egress {
     from_port   = 0
@@ -391,6 +451,47 @@ resource "aws_security_group" "ecs_node_sg" {
   }
 }
 
+
+# resource "aws_security_group" "ecs_node_sg" {
+#   name        = "ecs-node-sg-${local.env_suffix}"
+#   description = "SG for ECS EC2 nodes"
+#   vpc_id      = aws_vpc.vpc.id
+
+#   # 1. Existing Rule: Allow Public ALB to hit Ephemeral Ports
+#   ingress {
+#     description     = "node port access from ALB"
+#     from_port       = 32768
+#     to_port         = 65535
+#     protocol        = "tcp"
+#     security_groups = [aws_security_group.alb_sg.id]
+#   }
+
+#   # 2. NEW: Allow the Internal NLB to route traffic to the Mongo Container
+#   ingress {
+#     description     = "Allow traffic from Internal NLB"
+#     from_port       = 27017
+#     to_port         = 27017
+#     protocol        = "tcp"
+#     security_groups = [aws_security_group.mongodb_nlb.id]
+#   }
+
+#   # 3. NEW: The Hairpin Fix (Self-Referencing)
+#   # Allows containers on the same EC2 node to talk to each other
+#   ingress {
+#     description = "Mongo ingress via NLB Client IP Preservation (Hairpin)"
+#     from_port   = 27017
+#     to_port     = 27017
+#     protocol    = "tcp"
+#     self        = true # This tells the SG to allow traffic from itself!
+#   }
+
+#   egress {
+#     from_port   = 0
+#     to_port     = 0
+#     protocol    = "-1"
+#     cidr_blocks = ["0.0.0.0/0"]
+#   }
+# }
 #---------------------------------------------
 # 6. EC2 Auto Scaling Group & Launch Template
 #---------------------------------------------
@@ -486,7 +587,8 @@ resource "aws_cognito_user_pool" "main" {
   name = "nextjs-task-manager-pool"
 
   # Allow users to sign in with their email address instead of a standard username
-  alias_attributes = ["email"]
+  # alias_attributes = ["email"]
+  username_attributes = ["email"]
 
   # Automatically verify the email address when a new user signs up
   auto_verified_attributes = ["email"]
@@ -507,10 +609,23 @@ resource "aws_cognito_user_pool" "main" {
       default_email_option = "CONFIRM_WITH_CODE" 
   }
 
-  # Optional: Keep the user pool lean by deleting users if you destroy the infrastructure
-  lifecycle {
-    prevent_destroy = false
+# This forces the Sign-Up page to require a Name
+  schema {
+    name                     = "name"
+    attribute_data_type      = "String"
+    developer_only_attribute = false
+    mutable                  = true
+    required                 = true
+    
+    string_attribute_constraints {
+      min_length = 0
+      max_length = 256
+    }
   }
+  # Optional: Keep the user pool lean by deleting users if you destroy the infrastructure
+  # lifecycle {
+  #   prevent_destroy = false
+  # }
 }
 
 # 2. The Cognito User Pool Domain
@@ -520,8 +635,19 @@ resource "aws_cognito_user_pool_domain" "main" {
   # You may need to change "task-app-auth-123" if it is already taken.
   domain       = "auth-devsandbox-space" 
   user_pool_id = aws_cognito_user_pool.main.id
+
+  # This tells AWS to use the brand new Modern UI instead of the old HTML one
+  managed_login_version = 2
 }
 
+resource "aws_cognito_managed_login_branding" "nextjs_branding" {
+  # Link it to your EXISTING standard app client
+  client_id    = aws_cognito_user_pool_client.nextjs_client.id
+  user_pool_id = aws_cognito_user_pool.main.id
+
+  # This tells AWS: "Just generate the default modern V2 look"
+  use_cognito_provided_values = true
+}
 # 3. The Cognito App Client
 # Connects your Next.js application to the User Pool.
 resource "aws_cognito_user_pool_client" "nextjs_client" {
@@ -534,13 +660,13 @@ resource "aws_cognito_user_pool_client" "nextjs_client" {
   # Allowed Callback URLs
   callback_urls = [
     "https://devsandbox.space/api/auth/callback/cognito",
-    "http://localhost:3000/api/auth/callback/cognito" # Kept for local dev testing
+    # "http://localhost:3000/api/auth/callback/cognito" # Kept for local dev testing
   ]
 
   # Allowed Sign-out URLs
   logout_urls = [
     "https://devsandbox.space/api/auth-logout",
-    "http://localhost:3000/api/auth-logout" # Kept for local dev testing
+    # "http://localhost:3000/api/auth-logout" # Kept for local dev testing
   ]
 
   # OAuth 2.0 Settings
@@ -550,7 +676,39 @@ resource "aws_cognito_user_pool_client" "nextjs_client" {
   
   # Ensure the default Cognito provider is supported
   supported_identity_providers         = ["COGNITO"]
+  prevent_user_existence_errors = "ENABLED"
+  enable_token_revocation  = true
+
+  explicit_auth_flows = [
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_SRP_AUTH"
+  ]
 }
+resource "aws_cognito_user_pool_ui_customization" "main" {
+  client_id    = aws_cognito_user_pool_client.nextjs_client.id
+  user_pool_id = aws_cognito_user_pool_domain.main.user_pool_id
+
+  # Injects modern CSS into the Hosted UI
+  css = <<EOF
+.background-customizable {
+  background-color: #f3f4f6;
+}
+.banner-customizable {
+  padding: 20px;
+  background-color: #ffffff;
+}
+.submitButton-customizable {
+  background-color: #000000;
+  border-radius: 8px;
+}
+.submitButton-customizable:hover {
+  background-color: #333333;
+}
+EOF
+}
+
 
 
 # Fetch the current AWS region automatically
@@ -1112,10 +1270,11 @@ resource "aws_lb" "mongodb_internal" {
   name               = "mongodb-internal-nlb"
   internal           = true
   load_balancer_type = "network"
+  enable_cross_zone_load_balancing = true
   
   # Deploy this in your private subnets
-  # subnets            = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
-  subnets            = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
+  subnets            = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
+  # subnets            = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
 
   # AWS recently added Security Group support for NLBs. 
   # This ensures only your App tier can talk to the database tier.
@@ -1183,27 +1342,27 @@ resource "aws_security_group" "mongodb_nlb" {
 
 # Add an Ingress rule to your EC2 Host Security Group 
 # to allow the NLB to forward traffic to the containers
-resource "aws_security_group_rule" "ec2_mongodb_ingress" {
-  type                     = "ingress"
-  from_port                = 27017
-  to_port                  = 27017
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.ecs_node_sg.id
-  source_security_group_id = aws_security_group.mongodb_nlb.id
-}
-# Allow EC2 nodes to communicate with each other on the MongoDB port
-# This is required because the NLB preserves the original Client IP
-resource "aws_security_group_rule" "ecs_node_self_mongo" {
-  type                     = "ingress"
-  from_port                = 27017
-  to_port                  = 27017
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.ecs_node_sg.id
+# resource "aws_security_group_rule" "ec2_mongodb_ingress" {
+#   type                     = "ingress"
+#   from_port                = 27017
+#   to_port                  = 27017
+#   protocol                 = "tcp"
+#   security_group_id        = aws_security_group.ecs_node_sg.id
+#   source_security_group_id = aws_security_group.mongodb_nlb.id
+# }
+# # Allow EC2 nodes to communicate with each other on the MongoDB port
+# # This is required because the NLB preserves the original Client IP
+# resource "aws_security_group_rule" "ecs_node_self_mongo" {
+#   type                     = "ingress"
+#   from_port                = 27017
+#   to_port                  = 27017
+#   protocol                 = "tcp"
+#   security_group_id        = aws_security_group.ecs_node_sg.id
   
-  # The SG references itself!
-  source_security_group_id = aws_security_group.ecs_node_sg.id 
-  description              = "Mongo ingress via NLB Client IP Preservation"
-}
+#   # The SG references itself!
+#   source_security_group_id = aws_security_group.ecs_node_sg.id 
+#   description              = "Mongo ingress via NLB Client IP Preservation"
+# }
 # The MongoDB ECS Service
 resource "aws_ecs_service" "mongodb" {
   name            = "mongodb-service"

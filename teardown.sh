@@ -6,7 +6,7 @@
 
 CLUSTER_NAME="ecs-cluster-dev"
 # Define your services as an array
-SERVICES=("authors-service-dev" "books-service-dev" "dashboard-service-dev")
+SERVICES=("nextjs-app-service" "mongodb-service" )
 ASG_NAME="ecs-asg-dev"
 REGION="us-east-1"
 
