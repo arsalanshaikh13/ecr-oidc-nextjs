@@ -60,8 +60,12 @@ export async function proxy(request: NextRequest) {
   );
 
   // --- THE FIX ---
-  // Force the fetch to use the internal, unencrypted HTTP port of the container
-  const sessionUrl = "http://localhost:3000/api/auth/get-session";
+  // // Force the fetch to use the internal, unencrypted HTTP port of the container
+  // const sessionUrl = "http://localhost:3000/api/auth/get-session";
+  // We use the actual host header (devsandbox.space) but force HTTP.
+  // Next.js intercepts this internally, skipping OpenSSL crashes and bypassing localhost drops.
+  const host = request.headers.get("host") || "localhost:3000";
+  const sessionUrl = `http://${host}/api/auth/get-session`;
   // ---------------
 
   try {
