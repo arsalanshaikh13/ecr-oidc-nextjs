@@ -1134,18 +1134,29 @@ resource "aws_ecs_task_definition" "app" {
         { name = "BETTER_AUTH_URL", value = "https://${var.domain_name}" },
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "COGNITO_REGION", value = var.region },
-        { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id }
+        { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
+        {
+          name  = "NEXT_PUBLIC_COGNITO_DOMAIN"
+          value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+        }
+        
       ]
 
       secrets = [
         { name = "BETTER_AUTH_SECRET", valueFrom = aws_ssm_parameter.better_auth_secret.arn },
         { name = "MONGODB_URI", valueFrom = aws_secretsmanager_secret.mongodb_uri.arn },
         { name = "COGNITO_CLIENT_ID", valueFrom = aws_ssm_parameter.cognito_client_id.arn },
+        { 
+          name = "NEXT_PUBLIC_COGNITO_CLIENT_ID", valueFrom = aws_ssm_parameter.cognito_client_id.arn 
+        },
         { name = "COGNITO_CLIENT_SECRET", valueFrom = aws_ssm_parameter.cognito_client_secret.arn }
       ]
 
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+        # curl command is missing in alpine linux
+        # command     = ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+        # Using wget (native to Alpine), 127.0.0.1 (forces IPv4), and the new lightweight endpoint
+        command     = ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1"]
         interval    = 30
         timeout     = 10
         retries     = 3

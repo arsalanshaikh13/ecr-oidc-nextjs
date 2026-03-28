@@ -1,6 +1,6 @@
+import { NextResponse } from "next/server";
+
 export async function GET() {
-  return new Response(JSON.stringify({ status: "ok" }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  // A simple, database-free ping to tell AWS the container is alive
+  return NextResponse.json({ status: "healthy" }, { status: 200 });
 }
