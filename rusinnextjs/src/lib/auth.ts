@@ -33,6 +33,9 @@ export async function getDb() {
 }
 
 export const auth = betterAuth({
+  // / --- ADD THIS LINE ---
+  baseURL: process.env.BETTER_AUTH_URL || "https://devsandbox.space",
+
   database: mongodbAdapter(await getDb(), {}),
   trustedHosts: ["*"],
 

@@ -70,6 +70,9 @@ export async function proxy(request: NextRequest) {
         cookie: request.headers.get("cookie") || "",
         "x-forwarded-proto":
           request.headers.get("x-forwarded-proto") || "https",
+        // This tricks Better Auth into thinking this internal fetch came from the public internet
+        host: request.headers.get("host") || "devsandbox.space",
+        origin: "https://devsandbox.space",
       },
     });
 
