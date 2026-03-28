@@ -24,6 +24,7 @@ env:
   ECS_TASK_DEFINITION: task-definition.json
   CONTAINER_NAME: nextjs_task_manager_app
   DOMAIN_NAME: devsandbox.space
+  USER_POOL: nextjs-task-manager-pool
 
 permissions:
   id-token: write
@@ -49,6 +50,37 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       # ---------------------------------------------------------
+      # NEW STEP: Dynamically Fetch Cognito Values via AWS CLI
+      # ---------------------------------------------------------
+      - name: Fetch Cognito Details
+        id: fetch-cognito
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_build == true) }}
+        run: |
+          # 1. Get User Pool ID by finding the pool with your exact name
+          # REPLACE 'YOUR_USER_POOL_NAME' with your actual pool name from Terraform!
+          USER_POOL_NAME=${{ env.USER_POOL }}
+          USER_POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 --query "UserPools[?Name=='$USER_POOL_NAME'].Id" --output text)
+
+          if [ -z "$USER_POOL_ID" ] || [ "$USER_POOL_ID" == "None" ]; then
+            echo "Error: Could not find User Pool with name $USER_POOL_NAME"
+            exit 1
+          fi
+
+          # 2. Get the first App Client ID attached to this User Pool
+          CLIENT_ID=$(aws cognito-idp list-user-pool-clients --user-pool-id $USER_POOL_ID --max-results 10 --query "UserPoolClients[0].ClientId" --output text)
+
+          # 3. Get the Domain Prefix to construct the full Cognito Domain URL
+          DOMAIN_PREFIX=$(aws cognito-idp describe-user-pool --user-pool-id $USER_POOL_ID --query "UserPool.Domain" --output text)
+          COGNITO_DOMAIN="https://${DOMAIN_PREFIX}.auth.${{ env.AWS_REGION }}.amazoncognito.com"
+
+          echo "✅ Found Client ID: $CLIENT_ID"
+          echo "✅ Found Domain: $COGNITO_DOMAIN"
+
+          # 4. Save to GitHub Env so the Docker step can access them
+          echo "NEXT_PUBLIC_COGNITO_CLIENT_ID=$CLIENT_ID" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_COGNITO_DOMAIN=$COGNITO_DOMAIN" >> $GITHUB_ENV
+
+      # ---------------------------------------------------------
       # NEW STEP: Fetch Secrets securely
       # ---------------------------------------------------------
       #   - name: Fetch MongoDB URI from Secrets Manager
@@ -66,6 +98,7 @@ jobs:
       # ---------------------------------------------------------
       # FIXED: Consolidated Build & Push
       # ---------------------------------------------------------
+
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_build == true) }}
@@ -79,6 +112,8 @@ jobs:
           docker build \
             --build-arg NEXT_PUBLIC_APP_URL=https://${{ env.DOMAIN_NAME }} \
             --build-arg MONGODB_URI=mongodb://build-time-dummy \
+            --build-arg NEXT_PUBLIC_COGNITO_DOMAIN=${{ env.NEXT_PUBLIC_COGNITO_DOMAIN }} \
+            --build-arg NEXT_PUBLIC_COGNITO_CLIENT_ID=${{ env.NEXT_PUBLIC_COGNITO_CLIENT_ID }} \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
             .

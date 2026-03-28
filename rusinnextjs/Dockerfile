@@ -4,8 +4,14 @@ FROM node:24-alpine AS builder
 # Build-time arguments
 ARG NEXT_PUBLIC_APP_URL
 ARG MONGODB_URI
+ARG NEXT_PUBLIC_COGNITO_DOMAIN
+ARG NEXT_PUBLIC_COGNITO_CLIENT_ID
+
+# Set them as environment variables so Next.js can bake them into the client build
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
-    MONGODB_URI=$MONGODB_URI
+    MONGODB_URI=$MONGODB_URI \
+    NEXT_PUBLIC_COGNITO_DOMAIN=$NEXT_PUBLIC_COGNITO_DOMAIN \
+    NEXT_PUBLIC_COGNITO_CLIENT_ID=$NEXT_PUBLIC_COGNITO_CLIENT_ID
 
 WORKDIR /app
 
@@ -47,9 +53,9 @@ USER nextjs
 # Set production environment
 ENV NODE_ENV=production
 
-# Use dumb-init to handle signals
-ENTRYPOINT ["dumb-init", "--"]
 # Force Next.js standalone server to listen on all interfaces
 ENV HOSTNAME="0.0.0.0"
 
+# Use dumb-init to handle signals
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]

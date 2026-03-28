@@ -1190,11 +1190,7 @@ resource "aws_ecs_task_definition" "app" {
         { name = "BETTER_AUTH_URL", value = "https://${var.domain_name}" },
         { name = "COGNITO_DOMAIN", value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
         { name = "COGNITO_REGION", value = var.region },
-        { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
-        {
-          name  = "NEXT_PUBLIC_COGNITO_DOMAIN"
-          value = "${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
-        }
+        { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id }
         
       ]
 
@@ -1202,9 +1198,6 @@ resource "aws_ecs_task_definition" "app" {
         { name = "BETTER_AUTH_SECRET", valueFrom = aws_ssm_parameter.better_auth_secret.arn },
         { name = "MONGODB_URI", valueFrom = aws_secretsmanager_secret.mongodb_uri.arn },
         { name = "COGNITO_CLIENT_ID", valueFrom = aws_ssm_parameter.cognito_client_id.arn },
-        { 
-          name = "NEXT_PUBLIC_COGNITO_CLIENT_ID", valueFrom = aws_ssm_parameter.cognito_client_id.arn 
-        },
         { name = "COGNITO_CLIENT_SECRET", valueFrom = aws_ssm_parameter.cognito_client_secret.arn }
       ]
 

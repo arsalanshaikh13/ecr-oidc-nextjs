@@ -32,23 +32,19 @@ export default function Navigation() {
       await signOut({
         fetchOptions: {
           onSuccess: () => {
-            // 1. Define your Cognito endpoints
-            // Make sure these match your actual Terraform output/environment variables!
-            // const cognitoDomain =
-            //   process.env.NEXT_PUBLIC_COGNITO_DOMAIN ||
-            //   "https://auth-devsandbox-space.auth.us-east-1.amazoncognito.com";
-            // const clientId =
-            //   process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ||
-            //   "YOUR_ACTUAL_CLIENT_ID";
-            const cognitoDomain =
-              "https://auth-devsandbox-space.auth.us-east-1.amazoncognito.com";
-            const clientId = "1oga9cuk7mmjfm3hqu1hciikj";
+            // Tell Next.js to use the variables injected during the Docker build
+            const cognitoDomain = process.env.NEXT_PUBLIC_COGNITO_DOMAIN;
+            const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID;
 
-            // 2. Define where Cognito should send the user AFTER destroying the cookie
-            // It MUST match one of the "logout_urls" you defined in your Terraform app client!
-            const logoutUri = "https://devsandbox.space/api/auth-logout";
+            const logoutUri = `https://${process.env.NEXT_PUBLIC_APP_URL}/api/auth-logout`;
 
-            // 3. Instead of using router.push("/"), redirect the browser directly to Cognito
+            if (!cognitoDomain || !clientId) {
+              console.error("Missing Cognito environment variables!");
+              return;
+            }
+
+            router.refresh();
+
             window.location.href = `${cognitoDomain}/logout?client_id=${clientId}&logout_uri=${encodeURIComponent(logoutUri)}`;
           },
         },
