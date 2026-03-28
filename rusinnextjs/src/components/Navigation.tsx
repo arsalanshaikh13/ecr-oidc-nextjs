@@ -34,12 +34,15 @@ export default function Navigation() {
           onSuccess: () => {
             // 1. Define your Cognito endpoints
             // Make sure these match your actual Terraform output/environment variables!
+            // const cognitoDomain =
+            //   process.env.NEXT_PUBLIC_COGNITO_DOMAIN ||
+            //   "https://auth-devsandbox-space.auth.us-east-1.amazoncognito.com";
+            // const clientId =
+            //   process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ||
+            //   "YOUR_ACTUAL_CLIENT_ID";
             const cognitoDomain =
-              process.env.NEXT_PUBLIC_COGNITO_DOMAIN ||
               "https://auth-devsandbox-space.auth.us-east-1.amazoncognito.com";
-            const clientId =
-              process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ||
-              "YOUR_ACTUAL_CLIENT_ID";
+            const clientId = "1oga9cuk7mmjfm3hqu1hciikj";
 
             // 2. Define where Cognito should send the user AFTER destroying the cookie
             // It MUST match one of the "logout_urls" you defined in your Terraform app client!
