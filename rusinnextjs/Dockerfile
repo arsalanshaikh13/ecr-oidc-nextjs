@@ -49,4 +49,7 @@ ENV NODE_ENV=production
 
 # Use dumb-init to handle signals
 ENTRYPOINT ["dumb-init", "--"]
+# Force Next.js standalone server to listen on all interfaces
+ENV HOSTNAME="0.0.0.0"
+
 CMD ["node", "server.js"]
