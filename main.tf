@@ -548,50 +548,6 @@ resource "aws_security_group" "ecs_node_sg" {
 #---------------------------------------------
 # 6. EC2 Auto Scaling Group & Launch Template
 #---------------------------------------------
-# Dynamically fetch the latest Amazon Linux 2023 ECS-Optimized AMI
-data "aws_ssm_parameter" "ecs_optimized_ami" {
-  name = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
-}
-
-resource "aws_launch_template" "ecs_lt" {
-  name_prefix   = "ecs-template-${local.env_suffix}"
-  image_id      = data.aws_ssm_parameter.ecs_optimized_ami.value
-  # instance_type = "t3.medium"
-  instance_type = "c7i-flex.large"
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.ecs_node_profile.name
-  }
-
-  vpc_security_group_ids = [aws_security_group.ecs_node_sg.id]
-
-  user_data = base64encode(<<-EOF
-    #!/bin/bash
-    echo ECS_CLUSTER=${aws_ecs_cluster.app_cluster.name} >> /etc/ecs/ecs.config
-  EOF
-  )
-}
-
-resource "aws_autoscaling_group" "ecs_asg" {
-  name                = "ecs-asg-${local.env_suffix}"
-  vpc_zone_identifier = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
-  # vpc_zone_identifier = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
-  
-  min_size         = 1
-  max_size         = 3
-  desired_capacity = 1
-
-  launch_template {
-    id      = aws_launch_template.ecs_lt.id
-    version = "$Latest"
-  }
-
-  tag {
-    key                 = "AmazonECSManaged"
-    value               = true
-    propagate_at_launch = true
-  }
-}
 
 #---------------------------------------------
 # 7. ECS Cluster & Capacity Provider
@@ -615,30 +571,30 @@ resource "aws_ecs_cluster" "app_cluster" {
   tags = local.common_tags
 }
 
-resource "aws_ecs_capacity_provider" "ec2_provider" {
-  name = "ec2-capacity-provider-${local.env_suffix}"
+# resource "aws_ecs_capacity_provider" "ec2_provider" {
+#   name = "ec2-capacity-provider-${local.env_suffix}"
 
-  auto_scaling_group_provider {
-    auto_scaling_group_arn         = aws_autoscaling_group.ecs_asg.arn
-    managed_termination_protection = "DISABLED"
+#   auto_scaling_group_provider {
+#     auto_scaling_group_arn         = aws_autoscaling_group.ecs_asg.arn
+#     managed_termination_protection = "DISABLED"
 
-    managed_scaling {
-      status          = "ENABLED"
-      target_capacity = 100 
-    }
-  }
-}
+#     managed_scaling {
+#       status          = "ENABLED"
+#       target_capacity = 100 
+#     }
+#   }
+# }
 
-resource "aws_ecs_cluster_capacity_providers" "cluster_attach" {
-  cluster_name = aws_ecs_cluster.app_cluster.name
-  capacity_providers = [aws_ecs_capacity_provider.ec2_provider.name]
+# resource "aws_ecs_cluster_capacity_providers" "cluster_attach" {
+#   cluster_name = aws_ecs_cluster.app_cluster.name
+#   capacity_providers = [aws_ecs_capacity_provider.ec2_provider.name]
 
-  default_capacity_provider_strategy {
-    base              = 1
-    weight            = 100
-    capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
-  }
-}
+#   default_capacity_provider_strategy {
+#     base              = 1
+#     weight            = 100
+#     capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
+#   }
+# }
 
 #---------------------------------------------
 # 8. AWS Cognito setup
@@ -1087,29 +1043,97 @@ resource "aws_route53_record" "subdomain_alias" {
 
 # }
 
+# 1. Create the persistent EFS drive
+resource "aws_efs_file_system" "mongodb_data" {
+  creation_token = "mongodb-fargate-data"
+  encrypted      = true
+
+  tags = {
+    Name = "MongoDB-Fargate-Storage"
+  }
+}
+
+# 2. Create Mount Targets (Plugging the drive into your Private Subnets)
+# You need one of these for EACH private subnet your MongoDB task might run in.
+resource "aws_efs_mount_target" "mongodb_mount_target_1" {
+  file_system_id  = aws_efs_file_system.mongodb_data.id
+  subnet_id       = aws_subnet.pri_sub_3a.id # Change to your actual subnet ID
+  security_groups = [aws_security_group.efs_sg.id] # We will define this next
+}
+
+resource "aws_efs_mount_target" "mongodb_mount_target_2" {
+  file_system_id  = aws_efs_file_system.mongodb_data.id
+  subnet_id       = aws_subnet.pri_sub_4b.id # Change to your actual subnet ID
+  security_groups = [aws_security_group.efs_sg.id]
+}
+
+resource "aws_security_group" "efs_sg" {
+  name        = "mongodb-efs-sg"
+  description = "Allow Fargate tasks to access EFS"
+  vpc_id      = aws_vpc.vpc.id
+
+  ingress {
+    description     = "Allow NFS traffic from MongoDB Fargate tasks"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    # IMPORTANT: This must be the Security Group attached to your MongoDB ECS Service!
+    security_groups = [aws_security_group.mongodb_sg.id] 
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
 resource "aws_ecs_task_definition" "mongodb" {
   family                   = "nextjs-task-manager-mongodb"
   # network_mode             = "bridge"
-  network_mode             = "host"
-  requires_compatibilities = ["EC2"]
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
 
+      memory    = var.mongo_memory 
+      cpu       = var.mongo_cpu
+
   # Provisions a local Docker volume on the EC2 host's EBS drive
+  # volume {
+  #   name = "mongodb_data_prod"
+  #   docker_volume_configuration {
+  #     scope         = "shared"
+  #     autoprovision = true
+  #     driver        = "local"
+  #   }
+  # }
+  # volume {
+  #   name = "mongodb_config_prod"
+  #   docker_volume_configuration {
+  #     scope         = "shared"
+  #     autoprovision = true
+  #     driver        = "local"
+  #   }
+  # }
+
+  # This replaces the empty bind mount block
   volume {
     name = "mongodb_data_prod"
-    docker_volume_configuration {
-      scope         = "shared"
-      autoprovision = true
-      driver        = "local"
+    
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.mongodb_data.id
+      root_directory     = "/"
+      transit_encryption = "ENABLED"
     }
   }
   volume {
     name = "mongodb_config_prod"
-    docker_volume_configuration {
-      scope         = "shared"
-      autoprovision = true
-      driver        = "local"
+    
+    efs_volume_configuration {
+      file_system_id     = aws_efs_file_system.mongodb_data.id
+      root_directory     = "/"
+      transit_encryption = "ENABLED"
     }
   }
 
@@ -1172,19 +1196,24 @@ resource "aws_ecs_task_definition" "mongodb" {
 resource "aws_ecs_task_definition" "app" {
   family                   = "nextjs-task-manager-app"
   # network_mode             = "bridge"
-  network_mode             = "host"
-  requires_compatibilities = ["EC2"]
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   task_role_arn            = aws_iam_role.ecs_task_role.arn
+  memory    = var.app_memory
+  cpu       = var.app_cpu
 
   container_definitions = jsonencode([
     {
       name      = "nextjs_task_manager_app"
       image     = var.app_image_uri
       essential = true
+      
+      # In Fargate, container-level CPU/Memory are optional if defined above,
+      # but it's good practice to keep them for multi-container tasks.
       memory    = var.app_memory
       cpu       = var.app_cpu
-      
+
       portMappings = [
         {
           containerPort = 3000
@@ -1214,7 +1243,7 @@ resource "aws_ecs_task_definition" "app" {
         # curl command is missing in alpine linux
         # command     = ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
         # Using wget (native to Alpine), 127.0.0.1 (forces IPv4), and the new lightweight endpoint
-        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://127.0.0.1:3000/api/health || exit 1"]
+        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://$${HOSTNAME}:3000/api/health || exit 1"]
         interval    = 30
         timeout     = 10
         retries     = 3
@@ -1237,99 +1266,6 @@ resource "aws_ecs_task_definition" "app" {
 #---------------------------------------------
 # 11. ECS Service
 #---------------------------------------------
-# resource "aws_ecs_service" "app_service" {
-#   name             = "rusin-service-${local.env_suffix}"
-#   cluster          = aws_ecs_cluster.app_cluster.id
-#   task_definition  = aws_ecs_task_definition.app_task.arn
-#   desired_count    = var.desired_count
-
-#   # ADD THIS: Force Terraform to give up faster if AWS hangs
-#   timeouts {
-#     delete = "5m" 
-#   }
-#   # Removed launch_type = "FARGATE", replaced with Capacity Provider Strategy
-#   capacity_provider_strategy {
-#     capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
-#     weight            = 100
-#   }
-
-#   # this only works for awsvpc network mode not host network mode
-#   network_configuration {
-#     # subnets          = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id] 
-#     subnets          = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id] 
-#     security_groups  = [aws_security_group.app_task_sg.id]
-#     assign_public_ip = false 
-#     # assign_public_ip = true # it only works with fargate
-#   }
-
-#   # ADD THIS LINE: Give the container 60 seconds to boot before the ALB checks it
-#   health_check_grace_period_seconds = 60
-
-#   load_balancer {
-#     target_group_arn = aws_lb_target_group.app_tg.arn
-#     container_name   = "rusin"
-#     container_port   = 3200
-#   }
-
-#   deployment_minimum_healthy_percent = 100 
-#   deployment_maximum_percent         = 200
-
-#   lifecycle {
-#     ignore_changes = [
-#       task_definition,
-#       desired_count
-#     ]
-#   }
-
-#   depends_on = [
-#     aws_lb_listener.app_listener_https_secure,
-#     aws_ecs_cluster_capacity_providers.cluster_attach # Ensure CP is attached before Service uses it
-#   ]
-# }
-
-
-# resource "aws_ecs_service" "app_service" {
-#   for_each         = local.services
-#   name             = "${each.key}-service-${local.env_suffix}"
-#   cluster          = aws_ecs_cluster.app_cluster.id
-#   # References the specific task definition created for this service
-#   task_definition  = aws_ecs_task_definition.app_task[each.key].arn
-#   desired_count    = var.desired_count
-
-#   timeouts {
-#     delete = "5m" 
-#   }
-
-#   capacity_provider_strategy {
-#     capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
-#     weight            = 100
-#   }
-
-
-#   health_check_grace_period_seconds = 60
-
-#   load_balancer {
-#     # Assuming your target groups are named similarly: dashboard-tg, books-tg, etc.
-#     target_group_arn = aws_lb_target_group.app_tg[each.key].arn
-#     container_name   = "rusin-${each.key}" # Matches the name in your JSON template
-#     container_port   = each.value.port
-#   }
-
-#   deployment_minimum_healthy_percent = 100 
-#   deployment_maximum_percent         = 200
-
-#   lifecycle {
-#     ignore_changes = [
-#       task_definition,
-#       desired_count
-#     ]
-#   }
-
-#   depends_on = [
-#     aws_lb_listener.app_listener_https_secure,
-#     aws_ecs_cluster_capacity_providers.cluster_attach
-#   ]
-# }
 
 
 
@@ -1369,8 +1305,8 @@ resource "aws_lb_target_group" "mongodb_internal" {
   port     = 27017
   protocol = "TCP" # Crucial for MongoDB
   vpc_id   = aws_vpc.vpc.id
-  # target_type = "ip" # Must be 'ip' when using awsvpc network mode
-  target_type = "instance" # Must be 'instance' when using host/bridge network mode
+  target_type = "ip" # Must be 'ip' when using awsvpc network mode
+  # target_type = "instance" # Must be 'instance' when using host/bridge network mode
 
   # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
   deregistration_delay = 30
@@ -1398,6 +1334,27 @@ resource "aws_security_group" "mongodb_nlb" {
     protocol        = "tcp"
     # Only allow traffic originating from the Next.js App's Security Group
     security_groups = [aws_security_group.ecs_node_sg.id] 
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+resource "aws_security_group" "mongodb_sg" {
+  name        = "mongodb-sg"
+  description = "Allow App tier to reach MongoDB NLB"
+  vpc_id      = aws_vpc.vpc.id
+
+  ingress {
+    description     = "MongoDB from App Tier"
+    from_port       = 27017
+    to_port         = 27017
+    protocol        = "tcp"
+    # Only allow traffic originating from the Next.js App's Security Group
+    security_groups = [aws_security_group.mongodb_nlb.id] 
   }
 
   egress {
@@ -1437,7 +1394,8 @@ resource "aws_ecs_service" "mongodb" {
   cluster         = aws_ecs_cluster.app_cluster.id # Replace with your cluster ID
   task_definition = aws_ecs_task_definition.mongodb.arn
   desired_count   = var.desired_count
-  # launch_type     = "EC2"
+  launch_type     = "FARGATE"
+  platform_version = "LATEST"
 
   # Attach the service to the NLB Target Group
   load_balancer {
@@ -1451,9 +1409,15 @@ resource "aws_ecs_service" "mongodb" {
     delete = "5m" 
   }
 
-  capacity_provider_strategy {
-    capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
-    weight            = 100
+  # capacity_provider_strategy {
+  #   capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
+  #   weight            = 100
+  # }
+
+  network_configuration { 
+    subnets          = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
+    security_groups  = [aws_security_group.mongodb_sg.id]
+    assign_public_ip = true # Always false for private databases
   }
 
   health_check_grace_period_seconds = 60
@@ -1471,13 +1435,13 @@ resource "aws_ecs_service" "mongodb" {
 
   depends_on = [
     aws_lb_listener.mongodb,
-    aws_ecs_cluster_capacity_providers.cluster_attach
+    # aws_ecs_cluster_capacity_providers.cluster_attach
   ]
 
   # Ensure the tasks are distributed across your EC2 instances (if running multiple)
-  placement_constraints {
-    type       = "distinctInstance"
-  }
+  # placement_constraints {
+  #   type       = "distinctInstance"
+  # }
 }
 
 resource "aws_lb" "app_alb" {
@@ -1529,8 +1493,8 @@ resource "aws_lb_target_group" "app_external" {
   port     = 3000
   protocol = "HTTP"
   vpc_id   = aws_vpc.vpc.id
-    # target_type = "ip" # Must be 'ip' when using awsvpc network mode
-  target_type = "instance" # Must be 'instance' when using host/bridge network mode
+    target_type = "ip" # Must be 'ip' when using awsvpc network mode
+  # target_type = "instance" # Must be 'instance' when using host/bridge network mode
   # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
   deregistration_delay = 30
 
@@ -1557,6 +1521,8 @@ resource "aws_ecs_service" "app" {
   task_definition = aws_ecs_task_definition.app.arn
   desired_count   = 2 # Assuming you want high availability
   # launch_type     = "EC2"
+  launch_type     = "FARGATE"
+  platform_version = "LATEST"
   enable_execute_command = true
 
   # Attach the service to the ALB Target Group
@@ -1570,12 +1536,19 @@ resource "aws_ecs_service" "app" {
     delete = "5m" 
   }
 
-  capacity_provider_strategy {
-    capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
-    weight            = 100
+  
+  # capacity_provider_strategy {
+  #   capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
+  #   weight            = 100
+  # }
+
+# 2. Mandatory Network Config
+  network_configuration {
+    # If your ALB is public, your tasks should still be in Private Subnets
+    subnets          = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
+    security_groups  = [aws_security_group.ecs_node_sg.id]
+    assign_public_ip = true 
   }
-
-
   health_check_grace_period_seconds = 60
 
   
@@ -1590,42 +1563,16 @@ resource "aws_ecs_service" "app" {
   }
 
   depends_on = [
-    aws_lb_listener.app_listener_https_secure,
-    aws_ecs_cluster_capacity_providers.cluster_attach
+    aws_lb_listener.app_listener_https_secure
+    # aws_ecs_cluster_capacity_providers.cluster_attach
   ]
 
   # Optional: Spread tasks evenly across Availability Zones
-  ordered_placement_strategy {
-    type  = "spread"
-    field = "attribute:ecs.availability-zone"
-  }
+  # ordered_placement_strategy {
+  #   type  = "spread"
+  #   field = "attribute:ecs.availability-zone"
+  # }
 }
 #---------------------------------------------
 # 12. Application Auto Scaling (Task Level)
 #---------------------------------------------
-# no need to scale mongo db container
-resource "aws_appautoscaling_target" "ecs_target" {
-  max_capacity       = 10
-  min_capacity       = 2
-  resource_id        = "service/${aws_ecs_cluster.app_cluster.name}/${aws_ecs_service.app.name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-}
-
-# Auto-scale tasks based on CPU Utilization
-resource "aws_appautoscaling_policy" "ecs_policy_cpu" {
-  name               = "rusin-cpu-autoscaling-${local.env_suffix}"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageCPUUtilization"
-    }
-    target_value       = 75.0
-    scale_in_cooldown  = 300
-    scale_out_cooldown = 60
-  }
-}
