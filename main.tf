@@ -368,7 +368,7 @@ resource "aws_secretsmanager_secret_version" "mongodb_uri_val" {
 # Dynamically builds: mongodb://admin:<random_password>@<internal-nlb-dns>:27017/task_manager?authSource=admin
   secret_string = format(
     # "mongodb+srv://admin:%s@%s.%s/task_manager?authSource=admin&directConnection=true",
-    "mongodb+srv://admin:%s@%s.%s/task_manager?authSource=admin",
+    "mongodb+srv://admin:%s@%s.%s/task_manager?authSource=admin&tls=false",
     random_password.mongodb_password.result,
     local.mongodb_service_name,
     local.internal_namespace
@@ -1014,8 +1014,8 @@ resource "aws_ecs_task_definition" "app" {
         # curl command is missing in alpine linux
         # command     = ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
         # Using wget (native to Alpine), 127.0.0.1 (forces IPv4), and the new lightweight endpoint
-        # command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://127.0.0.1:3000/api/health || exit 1"]
-        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://$${HOSTNAME}:3000/api/health || exit 1"]
+        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://127.0.0.1:3000/api/health || exit 1"]
+        # command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://$${HOSTNAME}:3000/api/health || exit 1"]
         interval    = 30
         timeout     = 10
         retries     = 3
