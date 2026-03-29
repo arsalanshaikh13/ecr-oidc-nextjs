@@ -365,12 +365,17 @@ resource "aws_secretsmanager_secret" "mongodb_uri" {
 resource "aws_secretsmanager_secret_version" "mongodb_uri_val" {
   secret_id     = aws_secretsmanager_secret.mongodb_uri.id
   
-  # Dynamically builds: mongodb://admin:<random_password>@<internal-nlb-dns>:27017/task_manager?authSource=admin
+# Dynamically builds: mongodb://admin:<random_password>@<internal-nlb-dns>:27017/task_manager?authSource=admin
   secret_string = format(
-    "mongodb://admin:%s@%s:27017/task_manager?authSource=admin&directConnection=true",
+    # "mongodb+srv://admin:%s@%s.%s/task_manager?authSource=admin&directConnection=true",
+    "mongodb+srv://admin:%s@%s.%s/task_manager?authSource=admin",
     random_password.mongodb_password.result,
-    aws_lb.mongodb_internal.dns_name
+    local.mongodb_service_name,
+    local.internal_namespace
   )
+
+
+    # secret_string = "mongodb://admin:${random_password.mongodb_password.result}@${local.mongodb_service_name}.${local.internal_namespace}:27017/task_manager"
 
   # lifecycle {
   #   ignore_changes = [secret_string]
@@ -505,46 +510,6 @@ resource "aws_security_group" "ecs_node_sg" {
 }
 
 
-# resource "aws_security_group" "ecs_node_sg" {
-#   name        = "ecs-node-sg-${local.env_suffix}"
-#   description = "SG for ECS EC2 nodes"
-#   vpc_id      = aws_vpc.vpc.id
-
-#   # 1. Existing Rule: Allow Public ALB to hit Ephemeral Ports
-#   ingress {
-#     description     = "node port access from ALB"
-#     from_port       = 32768
-#     to_port         = 65535
-#     protocol        = "tcp"
-#     security_groups = [aws_security_group.alb_sg.id]
-#   }
-
-#   # 2. NEW: Allow the Internal NLB to route traffic to the Mongo Container
-#   ingress {
-#     description     = "Allow traffic from Internal NLB"
-#     from_port       = 27017
-#     to_port         = 27017
-#     protocol        = "tcp"
-#     security_groups = [aws_security_group.mongodb_nlb.id]
-#   }
-
-#   # 3. NEW: The Hairpin Fix (Self-Referencing)
-#   # Allows containers on the same EC2 node to talk to each other
-#   ingress {
-#     description = "Mongo ingress via NLB Client IP Preservation (Hairpin)"
-#     from_port   = 27017
-#     to_port     = 27017
-#     protocol    = "tcp"
-#     self        = true # This tells the SG to allow traffic from itself!
-#   }
-
-#   egress {
-#     from_port   = 0
-#     to_port     = 0
-#     protocol    = "-1"
-#     cidr_blocks = ["0.0.0.0/0"]
-#   }
-# }
 #---------------------------------------------
 # 6. EC2 Auto Scaling Group & Launch Template
 #---------------------------------------------
@@ -883,209 +848,43 @@ resource "aws_route53_record" "subdomain_alias" {
 #---------------------------------------------
 # 9. ALB + Target Group + Listener
 #---------------------------------------------
-# resource "aws_lb" "app_alb" {
-#   name               = "alb-${local.env_suffix}"
-#   internal           = false
-#   load_balancer_type = "application"
-#   security_groups    = [aws_security_group.alb_sg.id]
-#   subnets            = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
-#   # subnets            = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
-#   # enable_deletion_protection = true 
-# }
 
-
-# resource "aws_lb_target_group" "app_tg" {
-#   for_each    = toset(["books", "authors", "dashboard"])
-#   name        = "${each.key}-tg-${local.env_suffix}"
-#   # name_prefix        = "${each.key}-tg-${local.env_suffix}"
-#   # name        = "tg-${local.env_suffix}"
-
-#   # 2. ADD 'name_prefix' (Must be 6 characters or less)
-#   # alway use name_prefix when we have to create and destroy the same resource
-#   # name_prefix          = "tg-${local.env_suffix}"
-#   # port        = 3200
-#   port        = 222
-#   # port        = 80
-#   protocol    = "HTTP"
-#   vpc_id      = aws_vpc.vpc.id
-#   # target_type = "ip" # Must be 'ip' when using awsvpc network mode
-#   target_type = "instance" # Must be 'instance' when using host/bridge network mode
-
-#   # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
-#   deregistration_delay = 30
-
-#   health_check {
-#     path                = "/health"
-#     healthy_threshold   = 5
-#     unhealthy_threshold = 3
-#     timeout             = 15
-#     interval            = 30
-#     matcher             = "200-399"
-#   }
-#   # 3. ADD THIS LIFECYCLE BLOCK
-#   lifecycle {
-#     create_before_destroy = true
-#   }
-# }
-
-
-
-# # Redirect HTTP to HTTPS
-# resource "aws_lb_listener" "http_redirect" {
-#   load_balancer_arn = aws_lb.app_alb.arn
-#   port              = 80
-#   protocol          = "HTTP"
-
-#   default_action {
-#     type = "redirect"
-#     redirect {
-#       port        = "443"
-#       protocol    = "HTTPS"
-#       status_code = "HTTP_301"
-#     }
-#   }
-# }
-
-# # Secure HTTPS Listener
-# resource "aws_lb_listener" "app_listener_https_secure" {
-#   load_balancer_arn = aws_lb.app_alb.arn
-#   port              = 443
-#   protocol          = "HTTPS"
-#   certificate_arn   = aws_acm_certificate_validation.app_cert_wait.certificate_arn
-
-#   default_action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.app_tg["dashboard"].arn
-#   }
-# }
-# resource "aws_lb_listener_rule" "api_routing" {
-#   # Loop only through authors and books
-#   for_each     = setsubtract(toset(["books", "authors", "dashboard"]), ["dashboard"])
-#   listener_arn = aws_lb_listener.app_listener_https_secure.arn
-#   priority     = each.key == "books" ? 10 : 20
-
-#   action {
-#     type             = "forward"
-#     target_group_arn = aws_lb_target_group.app_tg[each.key].arn
-#   }
-
-#   condition {
-#     host_header {
-#       values = ["${each.key}.${var.domain_name}"]
-#     }
-#   }
-#   # # Condition 1: Match the specific domain (Optional but recommended)
-#   # condition {
-#   #   host_header {
-#   #     values = ["www.${var.domain_name}", var.domain_name]
-#   #   }
-#   # }
-
-#   # # Condition 2: Match the path
-#   # condition {
-#   #   path_pattern {
-#   #     # Matches exactly "/books" and anything under it like "/books/123"
-#   #     values = ["/${each.key}", "/${each.key}/*", "/${each.key}*"] 
-#   #   }
-#   # }
-# }
 #---------------------------------------------
 # 10. ECS Task Definition
 #---------------------------------------------
-# resource "aws_ecs_task_definition" "app_task" {
-#   for_each                 = toset(["books", "authors", "dashboard"])
-#   family                   = "rusin-task-${local.env_suffix}"
-#   # network_mode             = "host"
-#   # network_mode             = "bridge"
-#   network_mode             = "awsvpc"
-#   requires_compatibilities = ["EC2"] # Changed from FARGATE
-#   cpu                      = var.app_cpu
-#   memory                   = var.app_memory
-#   memoryReservation        = var.app_memory_soft_limit
-#   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-#   task_role_arn            = aws_iam_role.ecs_task_role.arn 
+# 1. Create the Private DNS Namespace
+# 1. Define your shared strings once at the top
+locals {
+  mongodb_service_name = "mongodb"
+  internal_namespace   = "taskmanager.local"
+}
 
-#   container_definitions = jsonencode([
-#     {
-#       name      = "rusin"
-#       # image     = "${aws_ecr_repository.app_repo.repository_url}:latest" 
-#       image     = "httpd:2.4-alpine" # Bootstrapping image
-#       essential = true
+# 2. Reference the local variable for the Namespace
+resource "aws_service_discovery_private_dns_namespace" "internal" {
+  name        = local.internal_namespace
+  description = "Private DNS namespace for ECS tasks"
+  vpc         = aws_vpc.vpc.id 
+}
 
-#       portMappings = [{
-#         containerPort = 3200
-#         protocol      = "tcp"
-#       }]
-
-      
-#       # Only the dashboard gets these variables
-#       environment = each.key == "dashboard" ? [
-#         {
-#           name  = "BOOKS_API_URL"
-#           value = "http://books.${var.domain_name}"
-#         },
-#         {
-#           name  = "AUTHORS_API_URL"
-#           value = "http://authors.${var.domain_name}"
-#         }
-#       ] : [] # Returns an empty list for books and authors
-
-
-#       logConfiguration = {
-#         logDriver = "awslogs"
-#         options = {
-#           awslogs-group         = aws_cloudwatch_log_group.ecs_log_group.name
-#           awslogs-region        = var.region
-#           awslogs-stream-prefix = "ecs"
-#         }
-#       }
-#     }
-#   ])
-# }
-
-
-# resource "aws_ecs_task_definition" "app_task" {
-  # for_each = {
-  #   books     = { port = 3300 }
-  #   authors   = { port = 3400 }
-  #   dashboard = { port = 3200 }
-  # }
-#   for_each         = local.services
-#   family                   = "rusin-task-${each.key}"
-#   # network_mode             = "awsvpc"
-#   network_mode             = "bridge"
-#   # network_mode             = "host"
-#   requires_compatibilities = ["EC2"]
-#   cpu                      = var.app_cpu
-#   memory                   = var.app_memory
-#   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-#   task_role_arn            = aws_iam_role.ecs_task_role.arn
-
-#   # This reads your JSON file and injects the variables
-#   container_definitions = templatefile("${path.module}/task-definition.json.template", {
-#     SERVICE_NAME     = each.key
-#     APP_PORT         = each.value.port
-#     # ACCOUNT_ID       = data.aws_caller_identity.current.account_id
-#     ACCOUNT_ID       = var.account_id
-#     APP_CPU          = var.app_cpu
-#     APP_MEMORY       = var.app_memory
-#     ENV_VAR          = local.env_suffix
-#     # Initial bootstrap env; CI/CD will handle the real ones later
-#     ENVIRONMENT_VARS = each.key == "dashboard" ? jsonencode([
-#       { name = "BOOKS_SERVICE_URL", value = "https://books.${var.domain_name}" },
-#       { name = "AUTHORS_SERVICE_URL", value = "https://authors.${var.domain_name}" }
-#       # { name = "AUTHORS_SERVICE_URL", valueFrom = aws_secretsmanager_secret.app_secret.arn }
-#     ]) : "[]"
-#   })
+# 3. Reference the local variable for the Service
+resource "aws_service_discovery_service" "mongodb" {
+  name = local.mongodb_service_name
   
-#     lifecycle {
-#     ignore_changes = [
-#       container_definitions
-      
-#     ]
-#   }
-
-# }
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.internal.id
+    routing_policy = "MULTIVALUE"
+    # CHANGED: Fargate uses 'A', EC2 Bridge uses 'SRV'
+    dns_records {
+      ttl  = 10
+      type = "SRV" 
+      # type = "A" 
+    }
+  }
+  
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
 
 resource "aws_ecs_task_definition" "mongodb" {
   family                   = "nextjs-task-manager-mongodb"
@@ -1214,7 +1013,8 @@ resource "aws_ecs_task_definition" "app" {
         # curl command is missing in alpine linux
         # command     = ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
         # Using wget (native to Alpine), 127.0.0.1 (forces IPv4), and the new lightweight endpoint
-        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://127.0.0.1:3000/api/health || exit 1"]
+        # command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://127.0.0.1:3000/api/health || exit 1"]
+        command     = ["CMD-SHELL", "wget --no-verbose --tries=3 --spider http://$${HOSTNAME}:3000/api/health || exit 1"]
         interval    = 30
         timeout     = 10
         retries     = 3
@@ -1333,104 +1133,6 @@ resource "aws_ecs_task_definition" "app" {
 
 
 
-# The Internal Network Load Balancer
-resource "aws_lb" "mongodb_internal" {
-  name               = "mongodb-internal-nlb"
-  internal           = true
-  load_balancer_type = "network"
-  enable_cross_zone_load_balancing = true
-  
-  # Deploy this in your private subnets
-  subnets            = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
-  # subnets            = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
-
-  # AWS recently added Security Group support for NLBs. 
-  # This ensures only your App tier can talk to the database tier.
-  security_groups    = [aws_security_group.mongodb_nlb.id]
-}
-
-# The TCP Listener
-resource "aws_lb_listener" "mongodb" {
-  load_balancer_arn = aws_lb.mongodb_internal.arn
-  port              = "27017"
-  protocol          = "TCP"
-
-  default_action {
-    type             = "forward"
-    # This references the target group we created in the previous step
-    target_group_arn = aws_lb_target_group.mongodb_internal.arn 
-  }
-}
-
-# mongo db and internal alb terraform
-# The Target Group for the Internal NLB (TCP Traffic)
-resource "aws_lb_target_group" "mongodb_internal" {
-  name     = "mongodb-internal-tg"
-  port     = 27017
-  protocol = "TCP" # Crucial for MongoDB
-  vpc_id   = aws_vpc.vpc.id
-  # target_type = "ip" # Must be 'ip' when using awsvpc network mode
-  target_type = "instance" # Must be 'instance' when using host/bridge network mode
-
-  # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
-  deregistration_delay = 30
-
-  # Health check using TCP to ensure the port is open
-  health_check {
-    protocol            = "TCP"
-    port                = "traffic-port"
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    interval            = 10
-  }
-}
-
-# Security Group for the Internal NLB
-resource "aws_security_group" "mongodb_nlb" {
-  name        = "mongodb-nlb-sg"
-  description = "Allow App tier to reach MongoDB NLB"
-  vpc_id      = aws_vpc.vpc.id
-
-  ingress {
-    description     = "MongoDB from App Tier"
-    from_port       = 27017
-    to_port         = 27017
-    protocol        = "tcp"
-    # Only allow traffic originating from the Next.js App's Security Group
-    security_groups = [aws_security_group.ecs_node_sg.id] 
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-# Add an Ingress rule to your EC2 Host Security Group 
-# to allow the NLB to forward traffic to the containers
-# resource "aws_security_group_rule" "ec2_mongodb_ingress" {
-#   type                     = "ingress"
-#   from_port                = 27017
-#   to_port                  = 27017
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.ecs_node_sg.id
-#   source_security_group_id = aws_security_group.mongodb_nlb.id
-# }
-# # Allow EC2 nodes to communicate with each other on the MongoDB port
-# # This is required because the NLB preserves the original Client IP
-# resource "aws_security_group_rule" "ecs_node_self_mongo" {
-#   type                     = "ingress"
-#   from_port                = 27017
-#   to_port                  = 27017
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.ecs_node_sg.id
-  
-#   # The SG references itself!
-#   source_security_group_id = aws_security_group.ecs_node_sg.id 
-#   description              = "Mongo ingress via NLB Client IP Preservation"
-# }
 # The MongoDB ECS Service
 resource "aws_ecs_service" "mongodb" {
   name            = "mongodb-service"
@@ -1440,12 +1142,17 @@ resource "aws_ecs_service" "mongodb" {
   # launch_type     = "EC2"
 
   # Attach the service to the NLB Target Group
-  load_balancer {
-    target_group_arn = aws_lb_target_group.mongodb_internal.arn
-    container_name   = "nextjs_task_manager_mongodb"
-    container_port   = 27017
-  }
+  # load_balancer {
+  #   target_group_arn = aws_lb_target_group.mongodb_internal.arn
+  #   container_name   = "nextjs_task_manager_mongodb"
+  #   container_port   = 27017
+  # }
 
+  service_registries {
+    registry_arn   = aws_service_discovery_service.mongodb.arn
+    container_name = "nextjs_task_manager_mongodb"
+    container_port = 27017
+  }
 
   timeouts {
     delete = "5m" 
@@ -1470,7 +1177,7 @@ resource "aws_ecs_service" "mongodb" {
   }
 
   depends_on = [
-    aws_lb_listener.mongodb,
+    # aws_lb_listener.mongodb,
     aws_ecs_cluster_capacity_providers.cluster_attach
   ]
 
