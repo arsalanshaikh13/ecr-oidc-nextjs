@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import { Resolver } from "dns/promises"; // 👈 1. Import the specific Resolver class
 
 const MONGODB_URI = process.env.MONGODB_URI;
 
@@ -8,6 +7,7 @@ interface CachedConnection {
   promise: Promise<typeof mongoose> | null;
 }
 
+// Declare global mongoose cache for Next.js hot-reloading
 declare global {
   var mongooseCache: CachedConnection;
 }
@@ -18,18 +18,35 @@ if (!cached) {
   cached = global.mongooseCache = { conn: null, promise: null };
 }
 
+/**
+ * Connect to MongoDB
+ * Uses caching to avoid multiple connections in development (Turbopack reloads)
+ */
 export async function connectToDatabase() {
+  // ---------------------------------------------------------
+  // 1. CI/CD BUILD-TIME BYPASS
+  // Intercept the dummy URI from GitHub Actions so it doesn't try to connect
+  // ---------------------------------------------------------
   if (MONGODB_URI === "mongodb://build-time-dummy") {
     console.warn("⚠️ Build time detected. Skipping actual MongoDB connection.");
+    // We return the unconnected mongoose object just to satisfy TypeScript
+    // and any auth libraries that expect a defined return value.
     return mongoose;
   }
 
+  // ---------------------------------------------------------
+  // 2. RUNTIME MISSING VAR CHECK
+  // Moved inside the function so it doesn't crash the build stage
+  // ---------------------------------------------------------
   if (!MONGODB_URI) {
     throw new Error(
       "❌ Please define the MONGODB_URI environment variable inside ECS or .env.local",
     );
   }
 
+  // ---------------------------------------------------------
+  // 3. STANDARD CONNECTION LOGIC
+  // ---------------------------------------------------------
   if (cached.conn) {
     return cached.conn;
   }
@@ -39,45 +56,8 @@ export async function connectToDatabase() {
       bufferCommands: false,
     };
 
-    let activeUri = MONGODB_URI;
-
-    // --- UPDATED AWS CLOUD MAP SRV INTERCEPTOR ---
-    if (activeUri.startsWith("mongodb+srv://")) {
-      try {
-        const urlObj = new URL(activeUri);
-        const domain = urlObj.hostname;
-
-        console.log(`🔍 Looking up AWS Cloud Map SRV record for: ${domain}`);
-
-        // 2. Explicitly force Node.js to use the AWS Internal DNS Server
-        const resolver = new Resolver();
-        resolver.setServers(["169.254.169.253"]);
-
-        // 3. Ask AWS for the dynamic EC2 IP and port
-        const records = await resolver.resolveSrv(domain);
-
-        if (records && records.length > 0) {
-          const { name, port } = records[0];
-
-          activeUri = activeUri
-            .replace("mongodb+srv://", "mongodb://")
-            .replace(domain, `${name}:${port}`);
-
-          // Safe log that hides your password but proves it worked
-          console.log(`✅ Successfully rebuilt URI to target: ${name}:${port}`);
-        }
-      } catch (error) {
-        // 4. STOP if this fails. Do NOT let Mongoose try the broken +srv string.
-        console.error("❌ Failed to resolve AWS SRV record manually:", error);
-        throw new Error(
-          "DNS Resolution for AWS Cloud Map failed. Halting connection.",
-        );
-      }
-    }
-    // ---------------------------------------------
-
     cached.promise = mongoose
-      .connect(activeUri, opts)
+      .connect(MONGODB_URI as string, opts)
       .then((mongoose) => {
         console.log("✅ Connected to MongoDB");
         return mongoose;

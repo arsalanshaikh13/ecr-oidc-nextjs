@@ -868,7 +868,7 @@ resource "aws_service_discovery_private_dns_namespace" "internal" {
 
 # 3. Reference the local variable for the Service
 resource "aws_service_discovery_service" "mongodb" {
-  name = local.mongodb_service_name
+  name = "_mongodb._tcp.${local.mongodb_service_name}"
   
   dns_config {
     namespace_id   = aws_service_discovery_private_dns_namespace.internal.id
@@ -879,6 +879,7 @@ resource "aws_service_discovery_service" "mongodb" {
       type = "SRV" 
       # type = "A" 
     }
+    
   }
   
   health_check_custom_config {
