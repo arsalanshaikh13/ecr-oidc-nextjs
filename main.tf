@@ -367,10 +367,14 @@ resource "aws_secretsmanager_secret_version" "mongodb_uri_val" {
   
   # Dynamically builds: mongodb://admin:<random_password>@<internal-nlb-dns>:27017/task_manager?authSource=admin
   secret_string = format(
-    "mongodb://admin:%s@%s:27017/task_manager?authSource=admin&directConnection=true",
+    "mongodb://admin:%s@%s.%s:27017/task_manager?authSource=admin&directConnection=true",
     random_password.mongodb_password.result,
-    aws_lb.mongodb_internal.dns_name
+    local.mongodb_service_name,
+    local.internal_namespace
   )
+
+    # secret_string = "mongodb://admin:${random_password.mongodb_password.result}@${local.mongodb_service_name}.${local.internal_namespace}:27017/task_manager"
+
 
   # lifecycle {
   #   ignore_changes = [secret_string]
@@ -753,6 +757,38 @@ resource "aws_route53_record" "subdomain_alias" {
 # 10. ECS Task Definition
 #---------------------------------------------
 
+# 1. Create the Private DNS Namespace
+# 1. Define your shared strings once at the top
+locals {
+  mongodb_service_name = "mongodb"
+  internal_namespace   = "taskmanager.local"
+}
+
+# 2. Reference the local variable for the Namespace
+resource "aws_service_discovery_private_dns_namespace" "internal" {
+  name        = local.internal_namespace
+  description = "Private DNS namespace for ECS tasks"
+  vpc         = aws_vpc.vpc.id 
+}
+
+# 3. Reference the local variable for the Service
+resource "aws_service_discovery_service" "mongodb" {
+  name = local.mongodb_service_name
+  
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.internal.id
+    routing_policy = "MULTIVALUE"
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+  
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
 # 1. Create the persistent EFS drive
 resource "aws_efs_file_system" "mongodb_data" {
   creation_token = "mongodb-fargate-data"
@@ -979,80 +1015,6 @@ resource "aws_ecs_task_definition" "app" {
 
 
 
-# The Internal Network Load Balancer
-resource "aws_lb" "mongodb_internal" {
-  name               = "mongodb-internal-nlb"
-  internal           = true
-  load_balancer_type = "network"
-  enable_cross_zone_load_balancing = true
-  
-  # Deploy this in your private subnets
-  subnets            = [aws_subnet.pri_sub_3a.id, aws_subnet.pri_sub_4b.id]
-  # subnets            = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
-
-  # AWS recently added Security Group support for NLBs. 
-  # This ensures only your App tier can talk to the database tier.
-  security_groups    = [aws_security_group.mongodb_nlb.id]
-}
-
-# The TCP Listener
-resource "aws_lb_listener" "mongodb" {
-  load_balancer_arn = aws_lb.mongodb_internal.arn
-  port              = "27017"
-  protocol          = "TCP"
-
-  default_action {
-    type             = "forward"
-    # This references the target group we created in the previous step
-    target_group_arn = aws_lb_target_group.mongodb_internal.arn 
-  }
-}
-
-# mongo db and internal alb terraform
-# The Target Group for the Internal NLB (TCP Traffic)
-resource "aws_lb_target_group" "mongodb_internal" {
-  name     = "mongodb-internal-tg"
-  port     = 27017
-  protocol = "TCP" # Crucial for MongoDB
-  vpc_id   = aws_vpc.vpc.id
-  target_type = "ip" # Must be 'ip' when using awsvpc network mode
-  # target_type = "instance" # Must be 'instance' when using host/bridge network mode
-
-  # ADD THIS LINE: Lower the wait time from 5 minutes to 30 seconds
-  deregistration_delay = 30
-
-  # Health check using TCP to ensure the port is open
-  health_check {
-    protocol            = "TCP"
-    port                = "traffic-port"
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-    interval            = 10
-  }
-}
-
-# Security Group for the Internal NLB
-resource "aws_security_group" "mongodb_nlb" {
-  name        = "mongodb-nlb-sg"
-  description = "Allow App tier to reach MongoDB NLB"
-  vpc_id      = aws_vpc.vpc.id
-
-  ingress {
-    description     = "MongoDB from App Tier"
-    from_port       = 27017
-    to_port         = 27017
-    protocol        = "tcp"
-    # Only allow traffic originating from the Next.js App's Security Group
-    security_groups = [aws_security_group.ecs_node_sg.id] 
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
 resource "aws_security_group" "mongodb_sg" {
   name        = "mongodb-sg"
   description = "Allow App tier to reach MongoDB NLB"
@@ -1064,7 +1026,8 @@ resource "aws_security_group" "mongodb_sg" {
     to_port         = 27017
     protocol        = "tcp"
     # Only allow traffic originating from the Next.js App's Security Group
-    security_groups = [aws_security_group.mongodb_nlb.id] 
+    # security_groups = [aws_security_group.mongodb_nlb.id] 
+    security_groups = [aws_security_group.ecs_node_sg.id] 
   }
 
   egress {
@@ -1075,29 +1038,6 @@ resource "aws_security_group" "mongodb_sg" {
   }
 }
 
-# Add an Ingress rule to your EC2 Host Security Group 
-# to allow the NLB to forward traffic to the containers
-# resource "aws_security_group_rule" "ec2_mongodb_ingress" {
-#   type                     = "ingress"
-#   from_port                = 27017
-#   to_port                  = 27017
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.ecs_node_sg.id
-#   source_security_group_id = aws_security_group.mongodb_nlb.id
-# }
-# # Allow EC2 nodes to communicate with each other on the MongoDB port
-# # This is required because the NLB preserves the original Client IP
-# resource "aws_security_group_rule" "ecs_node_self_mongo" {
-#   type                     = "ingress"
-#   from_port                = 27017
-#   to_port                  = 27017
-#   protocol                 = "tcp"
-#   security_group_id        = aws_security_group.ecs_node_sg.id
-  
-#   # The SG references itself!
-#   source_security_group_id = aws_security_group.ecs_node_sg.id 
-#   description              = "Mongo ingress via NLB Client IP Preservation"
-# }
 # The MongoDB ECS Service
 resource "aws_ecs_service" "mongodb" {
   name            = "mongodb-service"
@@ -1108,11 +1048,6 @@ resource "aws_ecs_service" "mongodb" {
   platform_version = "LATEST"
 
   # Attach the service to the NLB Target Group
-  load_balancer {
-    target_group_arn = aws_lb_target_group.mongodb_internal.arn
-    container_name   = "nextjs_task_manager_mongodb"
-    container_port   = 27017
-  }
 
 
   timeouts {
@@ -1123,6 +1058,20 @@ resource "aws_ecs_service" "mongodb" {
   #   capacity_provider = aws_ecs_capacity_provider.ec2_provider.name
   #   weight            = 100
   # }
+
+  # replace load balancer with service discovery
+  # load_balancer {
+  #   target_group_arn = aws_lb_target_group.mongodb_internal.arn
+  #   container_name   = "nextjs_task_manager_mongodb"
+  #   container_port   = 27017
+  # }
+  # -------------------------
+
+  # --- ADD THIS BLOCK ---
+  service_registries {
+    registry_arn   = aws_service_discovery_service.mongodb.arn
+    container_name = "nextjs_task_manager_mongodb"
+  }
 
   network_configuration { 
     subnets          = [aws_subnet.pub_sub_1a.id, aws_subnet.pub_sub_2b.id]
@@ -1143,10 +1092,10 @@ resource "aws_ecs_service" "mongodb" {
     ]
   }
 
-  depends_on = [
-    aws_lb_listener.mongodb,
+  # depends_on = [
+    # aws_lb_listener.mongodb,
     # aws_ecs_cluster_capacity_providers.cluster_attach
-  ]
+  # ]
 
   # Ensure the tasks are distributed across your EC2 instances (if running multiple)
   # placement_constraints {
